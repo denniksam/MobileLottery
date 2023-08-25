@@ -2,11 +2,27 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http ;
 
 const Color firmLogoLight = Color(0xFFE73F3E);
 const Color firmLogoDark = Color(0xFFC1212D);
 const Color firmLogoGray = Color(0xFF484848);
+
+const String backendHost = "api.smartlab.com.ua" ;
+const String backendPath = "actions.php" ;
+
+const String appTitle = "Lottery" ;
+const String appPageTitle = "Обери собі бонус" ;
+const String enterOrderCode = "Введіть код" ;
+const String networkErrorTitle = "Помилка мережі" ;
+const String networkErrorMessage = "Немає зв'язку із сервером акцій. Перезапустіть застосунок пізніше" ;
+const String codeUnconfirmedTitle = "Код не підтверджено" ;
+const String codeUnconfirmedMessage = "Код введено неправильно або введений код не є учасником акції, або код вже брав участь в акції, або термін акції вичерпано." ;
+const String emptyFieldMessage = "Поле не можна залишати порожним" ;
+const String goButtonText = "Поїхали" ;
+const String defaultErrorMessage = 'У програмі виникла позаштатна ситуація' ;
+
 
 bool __enableTap = true;
 
@@ -20,12 +36,12 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Lottery',
+      title: appTitle,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: firmLogoLight),
         useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Обери собі бонус'),
+      home: const MyHomePage(title: appPageTitle),
     );
   }
 }
@@ -42,50 +58,78 @@ class MyHomePage extends StatefulWidget {
 var __actionItems = <ActionItem>[] ;
 
 class _MyHomePageState extends State<MyHomePage> {
-  final _formKey = GlobalKey<FormState>();
-  final _orderLastDigitsController = TextEditingController();
+  final _orderCodeController = TextEditingController();
   final _httpClient = http.Client() ;
   Key _refreshKey = UniqueKey();
   var cards = <RotCard>[] ;
-  String? _orderLastDigits ;
+  String? _orderCode ;
   String _firstLineText = "" ;
   String _errorWidgetMessage = "" ;
 
   @override
   void initState() {
     super.initState();
-    _httpClient.get(Uri.https("api.smartlab.com.ua","actions.php"))
-    .then((response) {
-      String body = utf8.decode( response.bodyBytes ) ;
-      if( kDebugMode ) {
-        print( "initState: got [${response.statusCode}] $body" ) ;
-      }
-      if(response.statusCode != 200) {
-        if (mounted) {
-          setState(() {
-            _errorWidgetMessage =
-            "Немає зв'язку із сервером акцій. Перезапустіть застосунок пізніше";
-          });
+    _restart() ;
+  }
+
+  Future<bool> _loadAction() async {
+    var response = await _httpClient.get(
+        Uri.https( backendHost, backendPath )
+    ) ;
+    String body = utf8.decode( response.bodyBytes ) ;
+    if( kDebugMode ) {
+      print( "initState: got [${response.statusCode}] $body" ) ;
+    }
+    if(response.statusCode != 200) {
+      return Future.error( networkErrorMessage ) ;
+    }
+    else {
+      __actionItems.clear() ;
+      try {
+        for (var item in jsonDecode(body)) {
+          __actionItems.add(ActionItem.fromJson(item));
         }
-        _showAlert(
-            title: "Помилка мережі",
-            message: _errorWidgetMessage
-        );
+        return true;
       }
-      else {
-        for( var item in jsonDecode( body ) ) {
-          __actionItems.add( ActionItem.fromJson( item ) ) ;
+      catch( ex ) {
+        if( kDebugMode ) {
+          print( "initState: jsonDecode $ex" ) ;
         }
-        _restart() ;
+        return false ;
       }
-    });
+    }
   }
 
   void _restart() {
-    __enableTap = true;
-    _orderLastDigits = null;
-    makeCards();
-    setState( () => _refreshKey = UniqueKey() ) ;
+    _loadAction()
+      .then(
+        (success) {
+          if( success ) {
+            __enableTap = true;
+            _orderCode = null;
+            makeCards();
+            if (mounted) {
+              setState(() => _refreshKey = UniqueKey());
+            }
+          }
+          else {
+            if (mounted) {
+              setState(() => _errorWidgetMessage = defaultErrorMessage);
+            }
+          }
+        },
+        onError: (error) {
+          if (mounted) {
+            setState(() {
+              _errorWidgetMessage = error.toString();
+            });
+            _showAlert(
+                title: networkErrorTitle,
+                message: _errorWidgetMessage
+            );
+          }
+        }
+      ) ;
   }
 
   void makeCards() {
@@ -116,12 +160,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
   void _onCodeEntered(String code) async {
     var streamedResponse = await _httpClient.send(
-        http.Request("CHECK",
-            Uri.https(
-              "api.smartlab.com.ua",
-              "actions.php",
-              { 'code': code }
-            )
+        http.Request(
+            "CHECK",
+            Uri.https( backendHost, backendPath, { 'code': code } )
         )
     ) ;
     String body = utf8.decode(await streamedResponse.stream.toBytes());
@@ -131,12 +172,11 @@ class _MyHomePageState extends State<MyHomePage> {
     if (streamedResponse.statusCode != 200) {
       if (mounted) {
         setState(() {
-          _errorWidgetMessage =
-          "Немає зв'язку із сервером акцій. Перезапустіть застосунок пізніше.";
+          _errorWidgetMessage = networkErrorMessage ;
         });
       }
       _showAlert(
-          title: "Помилка мережі",
+          title: networkErrorTitle,
           message: _errorWidgetMessage
       );
     }
@@ -145,17 +185,17 @@ class _MyHomePageState extends State<MyHomePage> {
       if( json['result'] ?? false ) {
         if (mounted) {
           setState(() {
-            _orderLastDigits = code ;
+            _orderCode = code ;
             _firstLineText = "Вибір бонусу по коду $code";
           });
         }
-        _orderLastDigitsController.clear();
+        _orderCodeController.clear();
       }
       else {
         if (mounted) {
           _showAlert(
-              title: "Код не підтверджено",
-              message: "Код введено неправильно або введений код не є учасником акції, або код вже брав участь в акції, або термін акції вичерпано."
+              title: codeUnconfirmedTitle,
+              message: codeUnconfirmedMessage
           );
         }
       }
@@ -164,11 +204,8 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _sendChoice(int index) async {
     var response = await _httpClient.put(
-        Uri.https(
-            "api.smartlab.com.ua",
-            "actions.php",
-            {
-              'code': _orderLastDigits,
+        Uri.https( backendHost, backendPath, {
+              'code': _orderCode,
               'choice': __actionItems[index].id
             }
         )
@@ -182,7 +219,7 @@ class _MyHomePageState extends State<MyHomePage> {
       if(mounted) {
         setState(() {
           _firstLineText = _ellipsis(
-              "По коду $_orderLastDigits вибран бонус ${__actionItems[index]
+              "По коду $_orderCode вибран бонус ${__actionItems[index]
                   .code} (${__actionItems[index].name})",
               maxLen: 40);
         });
@@ -191,7 +228,7 @@ class _MyHomePageState extends State<MyHomePage> {
     else {
       if(mounted) {
         setState(() {
-          _firstLineText = "По коду $_orderLastDigits вибір НЕ ЗБЕРЕЖЕНО" ;
+          _firstLineText = "По коду $_orderCode вибір НЕ ЗБЕРЕЖЕНО!" ;
         });
       }
     }
@@ -217,69 +254,49 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
       body: __actionItems.isEmpty
           ? _errorWidget()
-          : _orderLastDigits == null
+          : _orderCode == null
           ? _orderDataWidget()
           : _lotteryWidget(),
     );
   }
 
   Widget _orderDataWidget() {
-    return Center(
-      child: Form(
-        key: _formKey,
-        child: Column(
+    return Column(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             mainAxisSize: MainAxisSize.max,
             children: [
               const Spacer(),
               Image.asset("assets/images/logo_with_text.png"),
               const Spacer(),
+              const Text(enterOrderCode, style: TextStyle(fontSize: 18),),
+              const Spacer(),
               Padding(padding: const EdgeInsets.symmetric(horizontal: 40),
-                child: TextFormField(
-                  autofocus: true,
-                  controller: _orderLastDigitsController,
-                  decoration: const InputDecoration(
-                    alignLabelWithHint: true,
-                    contentPadding: EdgeInsets.zero,
-                    border: UnderlineInputBorder(),
-                    label: Center( child: Text("Останні цифри замовлення")),
-                  ),
-                  keyboardType: TextInputType.number,
-                  style: const TextStyle(fontSize: 30),
-                  textAlign: TextAlign.center,
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return "Поле не можна залишати порожним";
-                    }
-                    return null;
-                  },
-                ),
+                child: CodeInputField(onComplete: _onCodeEntered,),
               ),
               const Spacer(),
-              ElevatedButton(
+              /* ElevatedButton(
                 style: ButtonStyle(
                     backgroundColor: MaterialStateProperty.all(firmLogoDark)
                 ),
                 onPressed: () {
                   if (_formKey.currentState!.validate()) {
-                    _onCodeEntered(_orderLastDigitsController.text) ;
+                    _onCodeEntered(_orderCodeController.text) ;
                   }
                 },
                 child: const Text(
-                  "Поїхали",
+                  goButtonText,
                   style: TextStyle(
                       color: Colors.white,
                       fontSize: 20
                   ),
                 ),
-              ),
+              ),*/
               const Spacer(),
-            ]),
-      ),
-    );
+            ]);
   }
 
   Widget _lotteryWidget() {
+    int rem = cards.length % 2 ;
     return Column(
       mainAxisSize: MainAxisSize.max,
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -314,7 +331,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 ],
               )),
 
-        for(int i = 1; i < cards.length ~/ 2 - 1; i += 1 )
+        for(int i = 1; i < cards.length ~/ 2 + rem - 1; i += 1 )
           ...[
             Container(
               height: 2,
@@ -368,7 +385,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 children: [
                   Expanded(child: Container(
                     color: Colors.grey.shade50,
-                    child: cards[cards.length - 2 + cards.length % 2],
+                    child: cards[cards.length + rem - 2],
                   )),
                   Container(
                     width: 2,
@@ -384,6 +401,10 @@ class _MyHomePageState extends State<MyHomePage> {
                     Expanded(child: Container(
                       color: Colors.grey.shade50,
                       child: cards[cards.length - 1],
+                    ))
+                  else
+                    Expanded(child: Container(
+                      color: Colors.grey.shade100
                     )),
                 ],
               )),
@@ -407,7 +428,7 @@ class _MyHomePageState extends State<MyHomePage> {
           context: context,
           builder: (context) => AlertDialog(
             title: Text(title ?? 'Повідомлення'),
-            content: Text(message ?? 'У програмі виникла позаштатна ситуація'),
+            content: Text(message ?? defaultErrorMessage ),
             actions: [
               TextButton(
                 child: const Text("Зрозуміло"),
@@ -433,7 +454,129 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 }
 
-////////////////// CARD ///////////////////////////////////////////
+// region //////////////// CODE ///////////////////////////////////////////
+
+class CodeInputField extends StatefulWidget {
+  final Function onComplete ;
+
+  const CodeInputField({super.key, required this.onComplete});
+
+  @override
+  State<StatefulWidget> createState() => _CodeInputFieldState() ;
+}
+
+class _CodeInputFieldState extends State<CodeInputField> {
+  static const digits = ['0','1','2','3','4','5','6','7','8','9'] ;
+  final int cnt = 6 ;
+  final _fields = <TextField>[] ;
+  var _controllers = <TextEditingController>[] ;
+  var _focusNodes = <FocusNode>[] ;
+  var currentIndex = 0 ;
+
+  @override
+  void initState() {
+    super.initState();
+    ServicesBinding.instance.keyboard.addHandler(_onKey);
+    _controllers = List.generate( cnt, (_) => TextEditingController() ) ;
+    _focusNodes = List.generate( cnt, (_) => FocusNode() ) ;
+    for(int i = 0; i < cnt; i += 1) {
+      _fields.add(
+        TextField(
+          autofocus: i == 0,
+          controller: _controllers[i],
+          focusNode: _focusNodes[i],
+          keyboardType: TextInputType.number,
+          maxLength: 1,
+          onTap: () => _fieldTapped(i),
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 24,),
+          decoration: const InputDecoration(
+            contentPadding: EdgeInsets.zero,
+            border: OutlineInputBorder(
+                borderSide: BorderSide(width: 1)
+            ),
+            counterText: "",
+          ),
+        )
+      ) ;
+    }
+  }
+
+  void _fieldTapped(int index) {
+    currentIndex = index ;
+    _controllers[currentIndex].selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _controllers[currentIndex].text.length
+    ) ;
+  }
+
+  bool _onKey( KeyEvent event ) {  // https://stackoverflow.com/a/75736557/5569247
+    if (event is KeyDownEvent) {
+      final key = event.logicalKey.keyLabel;
+      if (key == "Backspace") {
+        _controllers[currentIndex].clear() ;
+        if( currentIndex > 0 ) {
+          currentIndex -= 1;
+          _focusNodes[currentIndex].requestFocus();
+          _controllers[currentIndex].selection = TextSelection(
+              baseOffset: 0,
+              extentOffset: _controllers[currentIndex].text.length
+          ) ;
+        }
+      }
+      else if( digits.contains( key ) ) {
+          _controllers[currentIndex].text = key ;
+          _trySubmit() ;
+        }
+    }
+    return true;
+  }
+
+  void _trySubmit() {
+    int emptyIndex = -1 ;
+    for( int i = 0; i < cnt; i += 1) {
+      int n = (currentIndex + i + 1) % cnt ;
+      if( _controllers[n].text.isEmpty ) {
+        emptyIndex = n ;
+        break ;
+      }
+    }
+    if( emptyIndex == -1 ) {
+      widget.onComplete( _controllers.map((c) => c.text).join() ) ;
+    }
+    else {
+      currentIndex = emptyIndex ;
+      _focusNodes[currentIndex].requestFocus() ;
+    }
+  }
+
+  Widget _fieldGenerator(index) => Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+          child: _fields[index],
+      )
+  ) ;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        ...List.generate( cnt ~/ 2, _fieldGenerator),
+        const Text("\u2014", style: TextStyle(fontSize: 28),),
+        ...List.generate( cnt - cnt ~/ 2, (i) => _fieldGenerator(cnt ~/ 2 + i)),
+      ]
+    ) ;
+  }
+
+  @override
+  void dispose() {
+    ServicesBinding.instance.keyboard.removeHandler(_onKey);
+    super.dispose();
+  }
+}
+// endregion
+
+// region //////////////// CARD ///////////////////////////////////////////
 
 class RotCard extends StatefulWidget {
   const RotCard({super.key, required this.callback, required this.child, required this.index, required this.controller});
@@ -516,8 +659,9 @@ class CardController extends ChangeNotifier {
     opacity = 0.5 ;
   }
 }
+// endregion
 
-///////////////// ORM //////////////////////////////////////////////
+// region /////////////// ORM //////////////////////////////////////////////
 class ActionItem {
   final String code ;
   final String id ;
@@ -541,3 +685,4 @@ class ActionItem {
     "ACT_PRICE_CITO": null
 },
  */
+// endregion
